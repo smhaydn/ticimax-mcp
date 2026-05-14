@@ -2,61 +2,63 @@
 
 Ticimax e-ticaret platformunu Claude ile yönetmek için MCP sunucusu.
 
-Sipariş listeleme, stok güncelleme, ürün yönetimi, üye sorgulama ve daha fazlası — hepsini Claude'a söyleyerek yapabilirsin.
+Her Ticimax mağazası kendi alan adı ve yetki koduyla bağlanır — tek sunucu, sınırsız mağaza.
 
 ---
 
-## Kurulum Yöntemleri
+## Kurulum
 
-### Yöntem 1 — Railway ile Uzak Sunucu (En Kolay, Önerilen)
+### Adım 1 — Railway'e Deploy Et
 
-Bu yöntemde sunucu internette çalışır. Claude Desktop'tan tek tıkla bağlanılır, bilgisayara hiçbir şey kurulmaz.
-
-#### Adım 1 — Railway'e Deploy Et
+Aşağıdaki butona tıkla, Railway hesabınla giriş yap ve deploy et. Kimlik bilgisi girmen gerekmez, her kullanıcı kendi bilgilerini URL ile verir.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/smhaydn/ticimax-mcp)
 
-Butona tıkla → Railway hesabınla giriş yap → Aşağıdaki bilgileri gir:
-
-| Değişken | Değer |
-|----------|-------|
-| `TICIMAX_ALAN_ADI` | `magazan.com` |
-| `TICIMAX_YETKI_KODU` | Ticimax panelinden aldığın yetki kodu |
-
 Deploy tamamlandığında Railway sana bir URL verir:
-`https://ticimax-mcp-xxxx.railway.app`
+```
+https://ticimax-mcp-xxxx.railway.app
+```
 
-#### Adım 2 — Claude Desktop'a Ekle
+---
 
-1. Claude Desktop'ı aç → sol menüden **Connectors** → **Add connector**
-2. **Add custom connector** ekranında:
+### Adım 2 — Yetki Kodunu Al
+
+Ticimax paneline gir → **Ayarlar → Entegrasyon → Web Servisleri** → yetki kodunu kopyala.
+
+---
+
+### Adım 3 — Claude Desktop'a Ekle
+
+1. Claude Desktop'ı aç → sol menüden **Connectors** → **Add connector** → **Add custom connector**
+2. Şu bilgileri gir:
 
 | Alan | Değer |
 |------|-------|
 | Name | `Ticimax` |
-| Remote MCP server URL | `https://ticimax-mcp-xxxx.railway.app/mcp` |
+| Remote MCP server URL | `https://ticimax-mcp-xxxx.railway.app/mcp?alan=ALAN_ADIN&yetki=YETKİ_KODUN` |
+
+**Örnek URL:**
+```
+https://ticimax-mcp-xxxx.railway.app/mcp?alan=magazan.com&yetki=ABC123XYZ
+```
 
 3. **Add** butonuna bas → hazır.
 
-#### Yetki Kodunu Nereden Alırsın?
+---
 
-Ticimax paneli → **Ayarlar → Entegrasyon → Web Servisleri** → yetki kodunu kopyala.
+### Bağlantıyı Test Et
+
+Claude'a şunu söyle:
+
+> "Ticimax bağlantısını test et"
+
+"Bağlantı başarılı" mesajları geliyorsa her şey çalışıyor.
 
 ---
 
-### Yöntem 2 — Claude Code (VS Code) ile Yerel Kurulum
+## Claude Code (VS Code) ile Kullanım
 
-VS Code'da Claude Code kullanıyorsan bu yöntemi tercih edebilirsin.
-
-#### Adım 1 — uv'yi Kur (yoksa)
-
-```bash
-pip install uv
-```
-
-#### Adım 2 — Claude Code'a Ekle
-
-`~/.claude/mcp.json` dosyasına şu bloğu ekle:
+VS Code'da Claude Code kullanıyorsan `~/.claude/mcp.json` dosyasına ekle:
 
 ```json
 {
@@ -72,18 +74,6 @@ pip install uv
   }
 }
 ```
-
-Kaydet ve Claude Code'u yeniden başlat.
-
----
-
-### Bağlantıyı Test Et
-
-Claude'a şunu söyle:
-
-> "Ticimax bağlantısını test et"
-
-Her servis için "Bağlantı başarılı" mesajı geliyorsa hazırsın.
 
 ---
 

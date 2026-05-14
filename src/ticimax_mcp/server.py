@@ -1,38 +1,51 @@
 """
 Ticimax MCP Sunucusu
-lolaofshine.com mağazasını Claude ile yönetmek için
+Her Ticimax mağazası kendi alan adı ve yetki koduyla bağlanabilir.
 """
 
 import os
 import json
+import contextvars
 from datetime import datetime, timedelta
 from typing import Optional
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 from zeep import Client
 from zeep.transports import Transport
 import requests
 
-load_dotenv()
+# Her istek için ayrı kimlik bilgisi — URL'den gelir
+_alan_adi_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("alan_adi", default="")
+_yetki_kodu_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("yetki_kodu", default="")
 
-# Bağlantı ayarları
-ALAN_ADI = os.getenv("TICIMAX_ALAN_ADI", "lolaofshine.com")
-YETKI_KODU = os.getenv("TICIMAX_YETKI_KODU", "")
 
-# Servis adresleri
+def get_alan_adi() -> str:
+    """İstek bazlı alan adını döndürür, yoksa env var'a bakar."""
+    return _alan_adi_ctx.get() or os.getenv("TICIMAX_ALAN_ADI", "")
+
+
+def get_yetki_kodu() -> str:
+    """İstek bazlı yetki kodunu döndürür, yoksa env var'a bakar."""
+    return _yetki_kodu_ctx.get() or os.getenv("TICIMAX_YETKI_KODU", "")
+
+
 def servis_url(servis_adi: str) -> str:
-    return f"https://{ALAN_ADI}/servis/{servis_adi}.svc?wsdl"
+    return f"https://{get_alan_adi()}/servis/{servis_adi}.svc?wsdl"
 
-# Zeep istemcileri — ilk çağrıda oluşturulur (lazy loading)
-_istemciler = {}
+
+# SOAP istemcileri — (alan_adi, servis_adi) bazlı önbelleklenir
+_istemciler: dict = {}
+
 
 def istemci_al(servis_adi: str):
     """Belirtilen servis için SOAP istemcisi döndürür."""
-    if servis_adi not in _istemciler:
+    alan = get_alan_adi()
+    anahtar = (alan, servis_adi)
+    if anahtar not in _istemciler:
         session = requests.Session()
         transport = Transport(session=session, timeout=60)
-        _istemciler[servis_adi] = Client(servis_url(servis_adi), transport=transport)
-    return _istemciler[servis_adi]
+        _istemciler[anahtar] = Client(servis_url(servis_adi), transport=transport)
+    return _istemciler[anahtar]
+
 
 def siparis_client():
     return istemci_al("SiparisServis")
@@ -46,8 +59,9 @@ def uye_client():
 def custom_client():
     return istemci_al("CustomServis")
 
+
 # FastMCP sunucusu
-mcp = FastMCP("Ticimax - lolaofshine.com")
+mcp = FastMCP("Ticimax MCP")
 
 
 # ─────────────────────────────────────────────
@@ -75,7 +89,6 @@ def siparis_listele(
     """
     try:
         c = siparis_client()
-
         filtre = c.get_type("ns0:WebSiparisFiltre")(
             EntegrasyonAktarildi=-1,
             IptalEdilmisUrunler=True,
@@ -90,19 +103,15 @@ def siparis_listele(
             TedarikciID=-1,
             UyeID=-1,
         )
-
         sayfalama = c.get_type("ns0:WebSiparisSayfalama")(
             BaslangicIndex=0,
             KayitSayisi=kayit_sayisi,
             SiralamaDegeri="id",
             SiralamaYonu="Desc"
         )
-
-        liste = c.service.SelectSiparis(YETKI_KODU, filtre, sayfalama)
-
+        liste = c.service.SelectSiparis(get_yetki_kodu(), filtre, sayfalama)
         if not liste:
             return "Belirtilen kriterlere uygun sipariş bulunamadı."
-
         sonuc = []
         for s in liste:
             sonuc.append({
@@ -115,9 +124,7 @@ def siparis_listele(
                 "OdemeTipi": s.OdemeTipi,
                 "KargoTakipNo": s.KargoTakipNo,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Siparişler alınamadı. Sebep: {str(e)}"
 
@@ -127,9 +134,7 @@ def siparis_detay(siparis_id: int) -> str:
     """Belirli bir siparişin detaylarını ve içindeki ürünleri getirir."""
     try:
         c = siparis_client()
-
-        # Siparişteki ürünleri çek
-        urunler = c.service.SelectSiparisUrun(YETKI_KODU, siparis_id, False)
+        urunler = c.service.SelectSiparisUrun(get_yetki_kodu(), siparis_id, False)
         urun_listesi = []
         for u in (urunler or []):
             urun_listesi.append({
@@ -138,9 +143,7 @@ def siparis_detay(siparis_id: int) -> str:
                 "Fiyat": u.Fiyat,
                 "Barkod": u.Barkod,
             })
-
-        # Ödeme bilgisini çek
-        odemeler = c.service.SelectSiparisOdeme(YETKI_KODU, siparis_id, 0)
+        odemeler = c.service.SelectSiparisOdeme(get_yetki_kodu(), siparis_id, 0)
         odeme_listesi = []
         for o in (odemeler or []):
             odeme_listesi.append({
@@ -149,15 +152,12 @@ def siparis_detay(siparis_id: int) -> str:
                 "Tarih": str(o.Tarih),
                 "Durum": o.OdemeDurumu,
             })
-
         sonuc = {
             "SiparisID": siparis_id,
             "Urunler": urun_listesi,
             "Odemeler": odeme_listesi,
         }
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Sipariş detayı alınamadı. Sebep: {str(e)}"
 
@@ -179,26 +179,21 @@ def siparis_durumu_guncelle(
     """
     try:
         c = siparis_client()
-
         istek = c.get_type("ns0:SetSiparisDurumRequest")(
             SiparisID=siparis_id,
             Durum=yeni_durum,
             KargoTakipNo=kargo_takip_no,
             MailBilgilendir=mail_gonder
         )
-
-        cevap = c.service.SetSiparisDurum(YETKI_KODU, istek)
-
+        cevap = c.service.SetSiparisDurum(get_yetki_kodu(), istek)
         if cevap.IsError:
             return f"Hata: {cevap.ErrorMessage}"
-
         durum_isimleri = {
             0: "Ön Sipariş", 1: "Onay Bekliyor", 2: "Onaylandı",
             3: "Ödeme Bekliyor", 4: "Paketleniyor", 5: "Tedarik Ediliyor",
             6: "Kargoya Verildi", 7: "Teslim Edildi", 8: "İptal Edildi", 9: "İade Edildi"
         }
         return f"Sipariş #{siparis_id} durumu '{durum_isimleri.get(yeni_durum, yeni_durum)}' olarak güncellendi."
-
     except Exception as e:
         return f"Hata: Sipariş durumu güncellenemedi. Sebep: {str(e)}"
 
@@ -208,12 +203,10 @@ def kargo_takip_no_ekle(siparis_id: int, takip_no: str) -> str:
     """Siparişe kargo takip numarası ekler."""
     try:
         c = siparis_client()
-        sonuc = c.service.SaveKargoTakipNo(YETKI_KODU, siparis_id, "", takip_no)
-
+        sonuc = c.service.SaveKargoTakipNo(get_yetki_kodu(), siparis_id, "", takip_no)
         if sonuc == "OK":
             return f"Sipariş #{siparis_id} için kargo takip numarası eklendi: {takip_no}"
         return f"Beklenmedik yanıt: {sonuc}"
-
     except Exception as e:
         return f"Hata: Kargo takip numarası eklenemedi. Sebep: {str(e)}"
 
@@ -223,17 +216,13 @@ def kargo_secenekleri_listele(sehir_id: int = 34) -> str:
     """Kullanılabilir kargo firmalarını ve fiyatlarını listeler. sehir_id: 34=İstanbul"""
     try:
         c = siparis_client()
-
         istek = c.get_type("ns0:GetKargoSecenekRequest")(
             ParaBirimi="TL",
             SehirId=sehir_id,
         )
-
-        liste = c.service.GetKargoSecenek(YETKI_KODU, istek)
-
+        liste = c.service.GetKargoSecenek(get_yetki_kodu(), istek)
         if not liste:
             return "Kargo seçeneği bulunamadı."
-
         sonuc = []
         for k in liste:
             sonuc.append({
@@ -242,9 +231,7 @@ def kargo_secenekleri_listele(sehir_id: int = 34) -> str:
                 "Fiyat": k.Fiyat,
                 "TahminiSure": k.TahminiSure,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Kargo seçenekleri alınamadı. Sebep: {str(e)}"
 
@@ -257,7 +244,6 @@ def iade_talepleri_listele(durum_id: int = -1) -> str:
     """
     try:
         c = custom_client()
-
         filtre = c.get_type("ns0:IadeTalepFiltre")(
             DurumID=durum_id,
             ParaIadeTipi=-1,
@@ -266,15 +252,11 @@ def iade_talepleri_listele(durum_id: int = -1) -> str:
             ID=-1,
         )
         istek = c.get_type("ns0:WebIadeTalepSelectRequest")(Filtre=filtre)
-
-        cevap = c.service.SelectIadeTalebi(YETKI_KODU, istek)
-
+        cevap = c.service.SelectIadeTalebi(get_yetki_kodu(), istek)
         if cevap.IsError:
             return f"Hata: {cevap.ErrorMessage}"
-
         if not cevap.IadeTalepList:
             return "İade talebi bulunamadı."
-
         sonuc = []
         for t in cevap.IadeTalepList:
             sonuc.append({
@@ -284,9 +266,7 @@ def iade_talepleri_listele(durum_id: int = -1) -> str:
                 "Durum": t.Durum,
                 "ParaIadeTipi": t.ParaIadeTipi,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: İade talepleri alınamadı. Sebep: {str(e)}"
 
@@ -300,16 +280,9 @@ def stok_guncelle(varyasyon_id: int, yeni_stok: int) -> str:
     """Bir ürün varyasyonunun stok adedini günceller."""
     try:
         c = urun_client()
-
-        varyasyon = c.get_type("ns0:Varyasyon")(
-            ID=varyasyon_id,
-            StokAdedi=yeni_stok
-        )
-
-        c.service.StokAdediGuncelle(YETKI_KODU, [varyasyon])
-
+        varyasyon = c.get_type("ns0:Varyasyon")(ID=varyasyon_id, StokAdedi=yeni_stok)
+        c.service.StokAdediGuncelle(get_yetki_kodu(), [varyasyon])
         return f"Varyasyon #{varyasyon_id} stok adedi {yeni_stok} olarak güncellendi."
-
     except Exception as e:
         return f"Hata: Stok güncellenemedi. Sebep: {str(e)}"
 
@@ -324,19 +297,10 @@ def toplu_stok_guncelle(varyasyon_stok_listesi: str) -> str:
     try:
         c = urun_client()
         liste_data = json.loads(varyasyon_stok_listesi)
-
         varyasyon_tipi = c.get_type("ns0:Varyasyon")
-        varyasyonlar = []
-        for item in liste_data:
-            varyasyonlar.append(varyasyon_tipi(
-                ID=item["varyasyon_id"],
-                StokAdedi=item["stok"]
-            ))
-
-        c.service.StokAdediGuncelle(YETKI_KODU, varyasyonlar)
-
+        varyasyonlar = [varyasyon_tipi(ID=item["varyasyon_id"], StokAdedi=item["stok"]) for item in liste_data]
+        c.service.StokAdediGuncelle(get_yetki_kodu(), varyasyonlar)
         return f"{len(varyasyonlar)} ürünün stoğu güncellendi."
-
     except json.JSONDecodeError:
         return "Hata: Liste formatı yanlış. Örnek: [{\"varyasyon_id\": 123, \"stok\": 50}]"
     except Exception as e:
@@ -357,25 +321,20 @@ def urun_listele(
     """
     try:
         c = urun_client()
-
         filtre = c.get_type("ns0:UrunFiltre")(
             AktifDurum=aktif,
             KategoriID=kategori_id,
             MarkaID=marka_id,
         )
-
         sayfalama = c.get_type("ns0:UrunSayfalama")(
             KayitSayisi=kayit_sayisi,
             SiralamaDegeri="id",
             SiralamaYonu="Desc",
             SayfaNo=sayfa_no
         )
-
-        liste = c.service.SelectUrun(YETKI_KODU, filtre, sayfalama)
-
+        liste = c.service.SelectUrun(get_yetki_kodu(), filtre, sayfalama)
         if not liste:
             return "Ürün bulunamadı."
-
         sonuc = []
         for u in liste:
             sonuc.append({
@@ -388,9 +347,7 @@ def urun_listele(
                 "KategoriID": u.KategoriID,
                 "MarkaID": u.MarkaID,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Ürünler alınamadı. Sebep: {str(e)}"
 
@@ -400,24 +357,16 @@ def urun_ara(arama_metni: str, kayit_sayisi: int = 20) -> str:
     """İsme göre ürün arar."""
     try:
         c = urun_client()
-
-        filtre = c.get_type("ns0:UrunFiltre")(
-            Adi=arama_metni,
-            AktifDurum=-1,
-        )
-
+        filtre = c.get_type("ns0:UrunFiltre")(Adi=arama_metni, AktifDurum=-1)
         sayfalama = c.get_type("ns0:UrunSayfalama")(
             KayitSayisi=kayit_sayisi,
             SiralamaDegeri="id",
             SiralamaYonu="Desc",
             SayfaNo=1
         )
-
-        liste = c.service.SelectUrun(YETKI_KODU, filtre, sayfalama)
-
+        liste = c.service.SelectUrun(get_yetki_kodu(), filtre, sayfalama)
         if not liste:
             return f"'{arama_metni}' aramasında ürün bulunamadı."
-
         sonuc = []
         for u in liste:
             sonuc.append({
@@ -428,9 +377,7 @@ def urun_ara(arama_metni: str, kayit_sayisi: int = 20) -> str:
                 "Stok": u.ToplamStok,
                 "Aktif": u.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Ürün araması yapılamadı. Sebep: {str(e)}"
 
@@ -440,16 +387,10 @@ def varyasyon_listele(urun_kart_id: int) -> str:
     """Bir ürüne ait tüm varyasyonları (beden, renk vb.) listeler."""
     try:
         c = urun_client()
-
-        filtre = c.get_type("ns0:VaryasyonFiltre")(
-            UrunKartiID=urun_kart_id,
-        )
-
-        liste = c.service.SelectVaryasyon(YETKI_KODU, filtre)
-
+        filtre = c.get_type("ns0:VaryasyonFiltre")(UrunKartiID=urun_kart_id)
+        liste = c.service.SelectVaryasyon(get_yetki_kodu(), filtre)
         if not liste:
             return f"Ürün #{urun_kart_id} için varyasyon bulunamadı."
-
         sonuc = []
         for v in liste:
             sonuc.append({
@@ -461,9 +402,7 @@ def varyasyon_listele(urun_kart_id: int) -> str:
                 "Ozellik2": v.Ozellik2,
                 "Aktif": v.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Varyasyonlar alınamadı. Sebep: {str(e)}"
 
@@ -473,11 +412,9 @@ def kategori_listele() -> str:
     """Tüm ürün kategorilerini listeler."""
     try:
         c = urun_client()
-        liste = c.service.SelectKategori(YETKI_KODU)
-
+        liste = c.service.SelectKategori(get_yetki_kodu())
         if not liste:
             return "Kategori bulunamadı."
-
         sonuc = []
         for k in liste:
             sonuc.append({
@@ -486,9 +423,7 @@ def kategori_listele() -> str:
                 "UstKategoriID": k.PID,
                 "Aktif": k.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Kategoriler alınamadı. Sebep: {str(e)}"
 
@@ -498,11 +433,9 @@ def marka_listele() -> str:
     """Tüm markaları listeler."""
     try:
         c = urun_client()
-        liste = c.service.SelectMarka(YETKI_KODU)
-
+        liste = c.service.SelectMarka(get_yetki_kodu())
         if not liste:
             return "Marka bulunamadı."
-
         sonuc = []
         for m in liste:
             sonuc.append({
@@ -510,9 +443,7 @@ def marka_listele() -> str:
                 "MarkaAdi": m.Adi,
                 "Aktif": m.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Markalar alınamadı. Sebep: {str(e)}"
 
@@ -526,19 +457,46 @@ def urun_fiyat_guncelle(
     """Bir ürün varyasyonunun fiyatını günceller."""
     try:
         c = urun_client()
-
         varyasyon = c.get_type("ns0:Varyasyon")(
             ID=varyasyon_id,
             SatisFiyati=satis_fiyati,
             ListeFiyati=liste_fiyati or satis_fiyati,
         )
-
-        c.service.VaryasyonGuncelle(YETKI_KODU, [varyasyon])
-
+        c.service.VaryasyonGuncelle(get_yetki_kodu(), [varyasyon])
         return f"Varyasyon #{varyasyon_id} fiyatı {satis_fiyati} TL olarak güncellendi."
-
     except Exception as e:
         return f"Hata: Fiyat güncellenemedi. Sebep: {str(e)}"
+
+
+@mcp.tool()
+def indirimli_fiyat_uygula(varyasyon_id_listesi: str, indirim_yuzdesi: float) -> str:
+    """
+    Birden fazla varyasyona yüzdelik indirim uygular.
+    varyasyon_id_listesi: JSON formatında liste, örnek: [123, 456, 789]
+    indirim_yuzdesi: örnek 20 (yüzde 20 indirim)
+    """
+    try:
+        c = urun_client()
+        id_listesi = json.loads(varyasyon_id_listesi)
+        filtre = c.get_type("ns0:VaryasyonFiltre")(IDList=id_listesi)
+        mevcut_varyasyonlar = c.service.SelectVaryasyon(get_yetki_kodu(), filtre)
+        if not mevcut_varyasyonlar:
+            return "Belirtilen varyasyonlar bulunamadı."
+        varyasyon_tipi = c.get_type("ns0:Varyasyon")
+        guncellenecekler = []
+        for v in mevcut_varyasyonlar:
+            yeni_fiyat = round(v.SatisFiyati * (1 - indirim_yuzdesi / 100), 2)
+            guncellenecekler.append(varyasyon_tipi(
+                ID=v.ID,
+                SatisFiyati=yeni_fiyat,
+                ListeFiyati=v.SatisFiyati,
+            ))
+        c.service.VaryasyonGuncelle(get_yetki_kodu(), guncellenecekler)
+        return f"{len(guncellenecekler)} ürüne %{indirim_yuzdesi} indirim uygulandı."
+    except json.JSONDecodeError:
+        return "Hata: Liste formatı yanlış. Örnek: [123, 456, 789]"
+    except Exception as e:
+        return f"Hata: İndirim uygulanamadı. Sebep: {str(e)}"
 
 
 # ─────────────────────────────────────────────
@@ -559,7 +517,6 @@ def uye_listele(
     """
     try:
         c = uye_client()
-
         filtre = c.get_type("ns0:UyeFiltre")(
             Aktif=aktif,
             AlisverisYapti=-1,
@@ -570,19 +527,15 @@ def uye_listele(
             Mail=mail,
             Telefon=telefon,
         )
-
         sayfalama = c.get_type("ns0:UyeSayfalama")(
             KayitSayisi=kayit_sayisi,
             SiralamaDegeri="id",
             SiralamaYonu="Desc",
             SayfaNo=sayfa_no
         )
-
-        liste = c.service.SelectUyeler(YETKI_KODU, filtre, sayfalama)
-
+        liste = c.service.SelectUyeler(get_yetki_kodu(), filtre, sayfalama)
         if not liste:
             return "Üye bulunamadı."
-
         sonuc = []
         for u in liste:
             sonuc.append({
@@ -594,9 +547,7 @@ def uye_listele(
                 "UyelikTarihi": str(u.UyelikTarihi),
                 "Aktif": u.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Üyeler alınamadı. Sebep: {str(e)}"
 
@@ -606,11 +557,9 @@ def uye_adres_listele(uye_id: int) -> str:
     """Belirli bir üyenin kayıtlı adreslerini listeler."""
     try:
         c = uye_client()
-        liste = c.service.SelectUyeAdres(YETKI_KODU, 0, uye_id)
-
+        liste = c.service.SelectUyeAdres(get_yetki_kodu(), 0, uye_id)
         if not liste:
             return f"Üye #{uye_id} için adres bulunamadı."
-
         sonuc = []
         for a in liste:
             sonuc.append({
@@ -623,79 +572,9 @@ def uye_adres_listele(uye_id: int) -> str:
                 "AliciAdi": a.AliciAdi,
                 "Telefon": a.AliciTelefon,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Üye adresleri alınamadı. Sebep: {str(e)}"
-
-
-# ─────────────────────────────────────────────
-#  KAMPANYA / İNDİRİM ARAÇLARI
-# ─────────────────────────────────────────────
-
-@mcp.tool()
-def kampanya_listele() -> str:
-    """
-    Mevcut kampanyaları listeler.
-    Not: Kampanya bilgisi Custom Servis üzerinden alınır.
-    """
-    try:
-        c = custom_client()
-        # Kampanya için entegrasyon veya özel servis çağrısı
-        # Ticimax'ın kampanya servisi CustomServis altında
-        return (
-            "Kampanya yönetimi için Ticimax panel üzerinden ilerleyebilirsiniz. "
-            "Kampanya fiyatlarını urun_fiyat_guncelle aracıyla ürün bazlı güncelleyebilir, "
-            "toplu_stok_guncelle ile stok ayarlaması yapabilirsiniz."
-        )
-    except Exception as e:
-        return f"Hata: {str(e)}"
-
-
-@mcp.tool()
-def indirimli_fiyat_uygula(
-    varyasyon_id_listesi: str,
-    indirim_yuzdesi: float
-) -> str:
-    """
-    Birden fazla varyasyona yüzdelik indirim uygular.
-
-    varyasyon_id_listesi: JSON formatında liste, örnek: [123, 456, 789]
-    indirim_yuzdesi: örnek 20 (yüzde 20 indirim)
-    """
-    try:
-        c = urun_client()
-        id_listesi = json.loads(varyasyon_id_listesi)
-
-        # Önce mevcut fiyatları çek
-        filtre = c.get_type("ns0:VaryasyonFiltre")(
-            IDList=id_listesi
-        )
-        mevcut_varyasyonlar = c.service.SelectVaryasyon(YETKI_KODU, filtre)
-
-        if not mevcut_varyasyonlar:
-            return "Belirtilen varyasyonlar bulunamadı."
-
-        varyasyon_tipi = c.get_type("ns0:Varyasyon")
-        guncellenecekler = []
-
-        for v in mevcut_varyasyonlar:
-            yeni_fiyat = round(v.SatisFiyati * (1 - indirim_yuzdesi / 100), 2)
-            guncellenecekler.append(varyasyon_tipi(
-                ID=v.ID,
-                SatisFiyati=yeni_fiyat,
-                ListeFiyati=v.SatisFiyati,  # Liste fiyatı orijinal kalır (üstü çizili fiyat)
-            ))
-
-        c.service.VaryasyonGuncelle(YETKI_KODU, guncellenecekler)
-
-        return f"{len(guncellenecekler)} ürüne %{indirim_yuzdesi} indirim uygulandı."
-
-    except json.JSONDecodeError:
-        return "Hata: Liste formatı yanlış. Örnek: [123, 456, 789]"
-    except Exception as e:
-        return f"Hata: İndirim uygulanamadı. Sebep: {str(e)}"
 
 
 # ─────────────────────────────────────────────
@@ -707,11 +586,9 @@ def kargo_firma_listele() -> str:
     """Tanımlı kargo firmalarını listeler."""
     try:
         c = custom_client()
-        liste = c.service.SelectKargoFirmalari(YETKI_KODU)
-
+        liste = c.service.SelectKargoFirmalari(get_yetki_kodu())
         if not liste:
             return "Kargo firması bulunamadı."
-
         sonuc = []
         for k in liste:
             sonuc.append({
@@ -719,9 +596,7 @@ def kargo_firma_listele() -> str:
                 "KargoAdi": k.Adi,
                 "Aktif": k.Aktif,
             })
-
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: Kargo firmaları alınamadı. Sebep: {str(e)}"
 
@@ -733,22 +608,22 @@ def kargo_firma_listele() -> str:
 @mcp.tool()
 def baglanti_test() -> str:
     """Ticimax servislerine bağlantının çalışıp çalışmadığını test eder."""
-    sonuclar = {}
-
+    alan = get_alan_adi()
+    if not alan:
+        return "Hata: Alan adı belirtilmemiş. URL'ye ?alan=magazan.com&yetki=XXXX ekleyin."
+    sonuclar = {"MagazaAdi": alan}
     servisler = [
         ("SiparisServis", lambda: siparis_client()),
         ("UrunServis", lambda: urun_client()),
         ("UyeServis", lambda: uye_client()),
         ("CustomServis", lambda: custom_client()),
     ]
-
     for ad, client_fn in servisler:
         try:
             client_fn()
             sonuclar[ad] = "Bağlantı başarılı"
         except Exception as e:
             sonuclar[ad] = f"Bağlantı başarısız: {str(e)}"
-
     return json.dumps(sonuclar, ensure_ascii=False)
 
 
@@ -757,32 +632,17 @@ def il_listele() -> str:
     """Türkiye'deki tüm illeri listeler."""
     try:
         c = custom_client()
-
-        istek = c.get_type("ns0:SelectIlRequest")(
-            FiltreIlID=-1,
-            FiltreUlkeID=-1
-        )
-
-        liste = c.service.SelectIller(YETKI_KODU, istek)
-
+        istek = c.get_type("ns0:SelectIlRequest")(FiltreIlID=-1, FiltreUlkeID=-1)
+        liste = c.service.SelectIller(get_yetki_kodu(), istek)
         if not liste:
             return "İl bulunamadı."
-
         sonuc = []
         for il in liste:
-            sonuc.append({
-                "IlID": il.ID,
-                "IlAdi": il.Adi,
-            })
-
+            sonuc.append({"IlID": il.ID, "IlAdi": il.Adi})
         return json.dumps(sonuc, ensure_ascii=False, default=str)
-
     except Exception as e:
         return f"Hata: İller alınamadı. Sebep: {str(e)}"
 
 
-def main():
-    mcp.run()
-
 if __name__ == "__main__":
-    main()
+    mcp.run()

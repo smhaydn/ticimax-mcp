@@ -1,11 +1,43 @@
-from .server import mcp
+from .server import mcp, _alan_adi_ctx, _yetki_kodu_ctx
 import os
 
+
 def main():
-    # MCP_TRANSPORT=http olursa Railway/uzak mod, yoksa yerel (stdio) mod
     transport = os.getenv("MCP_TRANSPORT", "stdio")
+
     if transport == "http":
+        import uvicorn
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse
+
+        class KimlikMiddleware(BaseHTTPMiddleware):
+            """Her istekten alan adı ve yetki kodunu okur, context'e yazar."""
+            async def dispatch(self, request, call_next):
+                alan = request.query_params.get("alan", "")
+                yetki = request.query_params.get("yetki", "")
+
+                # Kimlik bilgisi yoksa hata döndür
+                if not alan or not yetki:
+                    return JSONResponse(
+                        {
+                            "hata": "alan ve yetki parametreleri gerekli.",
+                            "ornek": "/mcp?alan=magazan.com&yetki=TICIMAX_YETKI_KODUN"
+                        },
+                        status_code=400
+                    )
+
+                # Context'e yaz — araçlar buradan okur
+                t1 = _alan_adi_ctx.set(alan)
+                t2 = _yetki_kodu_ctx.set(yetki)
+                try:
+                    response = await call_next(request)
+                finally:
+                    _alan_adi_ctx.reset(t1)
+                    _yetki_kodu_ctx.reset(t2)
+                return response
+
         port = int(os.getenv("PORT", 8000))
-        mcp.run(transport="http", host="0.0.0.0", port=port)
+        app = mcp.http_app(middleware=[KimlikMiddleware])
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
