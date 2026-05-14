@@ -6,32 +6,55 @@ Sipariş listeleme, stok güncelleme, ürün yönetimi, üye sorgulama ve daha f
 
 ---
 
-## Kurulum
+## Kurulum Yöntemleri
 
-### Yetki Kodunu Al
+### Yöntem 1 — Railway ile Uzak Sunucu (En Kolay, Önerilen)
 
-Ticimax paneline gir → **Ayarlar → Entegrasyon → Web Servisleri** → yetki kodunu kopyala.
+Bu yöntemde sunucu internette çalışır. Claude Desktop'tan tek tıkla bağlanılır, bilgisayara hiçbir şey kurulmaz.
 
----
+#### Adım 1 — Railway'e Deploy Et
 
-### Yöntem 1 — Claude Code Arayüzünden (En Kolay)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/smhaydn/ticimax-mcp)
 
-1. VS Code'da **Claude Code** yan panelini aç
-2. Alttaki **ayarlar simgesine** tıkla → **MCP Servers** → **Add MCP Server**
-3. Şu bilgileri gir:
+Butona tıkla → Railway hesabınla giriş yap → Aşağıdaki bilgileri gir:
+
+| Değişken | Değer |
+|----------|-------|
+| `TICIMAX_ALAN_ADI` | `magazan.com` |
+| `TICIMAX_YETKI_KODU` | Ticimax panelinden aldığın yetki kodu |
+
+Deploy tamamlandığında Railway sana bir URL verir:
+`https://ticimax-mcp-xxxx.railway.app`
+
+#### Adım 2 — Claude Desktop'a Ekle
+
+1. Claude Desktop'ı aç → sol menüden **Connectors** → **Add connector**
+2. **Add custom connector** ekranında:
 
 | Alan | Değer |
 |------|-------|
-| Command | `uv` |
-| Arguments | `tool, run, ticimax-mcp` |
-| TICIMAX_ALAN_ADI | `magazan.com` |
-| TICIMAX_YETKI_KODU | `ticimax-yetki-kodun` |
+| Name | `Ticimax` |
+| Remote MCP server URL | `https://ticimax-mcp-xxxx.railway.app/mcp` |
 
-4. Kaydet ve Claude Code'u yeniden başlat.
+3. **Add** butonuna bas → hazır.
+
+#### Yetki Kodunu Nereden Alırsın?
+
+Ticimax paneli → **Ayarlar → Entegrasyon → Web Servisleri** → yetki kodunu kopyala.
 
 ---
 
-### Yöntem 2 — Elle Dosyaya Ekle
+### Yöntem 2 — Claude Code (VS Code) ile Yerel Kurulum
+
+VS Code'da Claude Code kullanıyorsan bu yöntemi tercih edebilirsin.
+
+#### Adım 1 — uv'yi Kur (yoksa)
+
+```bash
+pip install uv
+```
+
+#### Adım 2 — Claude Code'a Ekle
 
 `~/.claude/mcp.json` dosyasına şu bloğu ekle:
 
@@ -101,11 +124,3 @@ Claude'a şunları söyleyebilirsin:
 - "Tüm ürünlere %20 indirim uygula"
 - "İade taleplerini listele"
 - "Bugün kaç sipariş geldi?"
-
----
-
-## Gereksinimler
-
-- [Claude Code](https://claude.ai/code) (VS Code eklentisi)
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) paket yöneticisi
-- Ticimax mağaza yetki kodu

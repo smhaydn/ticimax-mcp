@@ -1,0 +1,5 @@
+[deploy]
+startCommand = "ticimax-mcp"
+
+[deploy.environmentVariables]
+MCP_TRANSPORT = "http"
