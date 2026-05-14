@@ -7,6 +7,7 @@ def main():
 
     if transport == "http":
         import uvicorn
+        from starlette.middleware import Middleware
         from starlette.middleware.base import BaseHTTPMiddleware
         from starlette.responses import JSONResponse
 
@@ -16,7 +17,6 @@ def main():
                 alan = request.query_params.get("alan", "")
                 yetki = request.query_params.get("yetki", "")
 
-                # Kimlik bilgisi yoksa hata döndür
                 if not alan or not yetki:
                     return JSONResponse(
                         {
@@ -26,7 +26,6 @@ def main():
                         status_code=400
                     )
 
-                # Context'e yaz — araçlar buradan okur
                 t1 = _alan_adi_ctx.set(alan)
                 t2 = _yetki_kodu_ctx.set(yetki)
                 try:
@@ -37,7 +36,7 @@ def main():
                 return response
 
         port = int(os.getenv("PORT", 8000))
-        app = mcp.http_app(middleware=[KimlikMiddleware])
+        app = mcp.http_app(middleware=[Middleware(KimlikMiddleware)])
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
