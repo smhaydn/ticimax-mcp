@@ -29,7 +29,7 @@ def get_yetki_kodu() -> str:
 
 
 def servis_url(servis_adi: str) -> str:
-    return f"https://{get_alan_adi()}/servis/{servis_adi}.svc?wsdl"
+    return f"https://{get_alan_adi()}/Servis/{servis_adi}.svc?wsdl"
 
 
 # SOAP istemcileri — (alan_adi, servis_adi) bazlı önbelleklenir
