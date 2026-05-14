@@ -4,6 +4,7 @@ services:
     runtime: python
     buildCommand: pip install .
     startCommand: ticimax-mcp
+    healthCheckPath: /health
     envVars:
       - key: MCP_TRANSPORT
         value: http
